@@ -31,3 +31,4 @@ dev_dependencies:
   pigeon: ^26.0.1
   plugin_platform_interface: ^2.1.8
   solid_lints: ^0.3.1
+
