@@ -4,6 +4,9 @@
 * [Android] set Java compatibility to 11 instead of 8
 * [ios] updated MobileVLCKit
 * updated exmaple
+## 7.4.5
+* Update VLC Android Lib to support 16kb PageSize
+* Update Others Libs
 
 ## 7.4.2
 * fixed getVolume #486

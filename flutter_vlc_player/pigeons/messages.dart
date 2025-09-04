@@ -1,16 +1,5 @@
 import 'package:pigeon/pigeon.dart';
 
-// to make changes effect, must run "dart run pigeon --input pigeons/messages.dart"
-@ConfigurePigeon(
-  PigeonOptions(
-    dartOut:
-        '../flutter_vlc_player_platform_interface/lib/src/messages/messages.dart',
-    swiftOut: 'ios/Classes/Messages.swift',
-    javaOut:
-        'android/src/main/java/software/solid/fluttervlcplayer/Messages.java',
-    javaOptions: JavaOptions(package: 'software.solid.fluttervlcplayer'),
-  ),
-)
 //ignore: prefer_match_file_name
 class CreateMessage {
   final int playerId;
@@ -184,7 +173,6 @@ abstract class VlcPlayerApi {
   void castToRenderer(int playerId, String rendererId);
 
   // recording methods
-  bool startRecording(int playerId, String saveDirectory);
-
-  bool stopRecording(int playerId);
+  BooleanMessage startRecording(RecordMessage msg);
+  BooleanMessage stopRecording(ViewMessage msg);
 }
