@@ -3,8 +3,16 @@
 [![flutter_vlc_player](https://nokycucwgzweensacwfy.supabase.co/functions/v1/get_project_badge?projectId=148)](https://nokycucwgzweensacwfy.supabase.co/functions/v1/get_project_url?projectId=148)
 
 
+## Acknowledgement
+
+This package is a fork of [flutter_vlc_player](https://github.com/solid-software/flutter_vlc_player) by Solid Software LLC.  
+It is licensed under the BSD 3-Clause License.  
+
+All modifications in this fork are maintained independently.
+
+
+
 A VLC-powered alternative to Flutter's video_player that supports iOS and Android.
-This package is a fork of flutter_vlc_player by Solid Software LLC. Licensed under BSD 3-Clause.
 
 <div>
   <img src="https://raw.githubusercontent.com/solid-software/flutter_vlc_player/master/flutter_vlc_player/doc/single.jpg" height="400">
