@@ -1,6 +1,6 @@
 name: flutter_vlc_player_16kb
 description: A VLC-powered alternative to Flutter's video_player. Supports multiple players on one screen.
-version: 7.4.5
+version: 7.4.6
 homepage: https://github.com/naylinndev/flutter_vlc_player_16kb/
 repository: https://github.com/naylinndev/flutter_vlc_player_16kb
 
