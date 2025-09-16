@@ -623,7 +623,7 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
     return spuTracksCount;
   }
 
-  /// Return all subtitle tracks as array of <Int, String>
+  /// Return all subtitle tracks as array of `<Int, String>`
   /// The key parameter is the index of subtitle which is used for changing subtitle
   /// and the value is the display name of subtitle
   Future<Map<int, String>> getSpuTracks() async {
@@ -721,7 +721,7 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
     return audioTracksCount;
   }
 
-  /// Returns all audio tracks as array of <Int, String>
+  /// Returns all audio tracks as array of `<Int, String>`
   /// The key parameter is the index of audio track which is used for changing audio
   /// and the value is the display name of audio
   Future<Map<int, String>> getAudioTracks() async {
