@@ -819,7 +819,7 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
     return videoTracksCount;
   }
 
-  /// Returns all video tracks as array of <Int, String>
+  /// Returns all video tracks as array of `<Int, String>`
   /// The key parameter is the index of video track and the value is the display name of video track
   Future<Map<int, String>> getVideoTracks() async {
     _throwIfNotInitialized('getVideoTracks');
@@ -913,7 +913,7 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
     return vlcPlayerPlatform.stopRendererScanning(_viewId);
   }
 
-  /// Returns all detected renderer devices as array of <String, String>
+  /// Returns all detected renderer devices as array of `<String, String>`
   /// The key parameter is the name of cast device and the value is the display name of cast device
   Future<Map<String, String>> getRendererDevices() async {
     _throwIfNotInitialized('getRendererDevices');

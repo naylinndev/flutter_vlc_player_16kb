@@ -81,6 +81,7 @@ class _SingleTabState extends State<SingleTab> {
       case VideoType.network:
         _controller = VlcPlayerController.network(
           initVideo.path,
+          
           hwAcc: HwAcc.full,
           options: VlcPlayerOptions(
             advanced: VlcAdvancedOptions([
