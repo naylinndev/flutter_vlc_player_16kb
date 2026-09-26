@@ -27,7 +27,10 @@ class _TestSubtitleAppState extends State<TestSubtitleApp> {
   static const _url =
       'http://line.8kultradnscloud.ru/movie/rbEmkPVz4d/EvQs9JQ7ps/2016280.mkv';
 
-  late VlcPlayerController _controller;
+  /// VLC subtitle background opacity (0–255).
+  static const _subtitleBackgroundOpacity = 180;
+
+  VlcPlayerController? _controller;
   double _fontSize = 16;
   String _statusMessage = 'Initializing with font size 16 via --freetype-rel-fontsize…';
 
@@ -49,24 +52,23 @@ class _TestSubtitleAppState extends State<TestSubtitleApp> {
           VlcSubtitleOptions.boldStyle(true),
           VlcSubtitleOptions.color(VlcSubtitleColor.white),
           VlcSubtitleOptions.backgroundColor(VlcSubtitleColor.black),
-          VlcSubtitleOptions.backgroundOpacity(180),
+          VlcSubtitleOptions.backgroundOpacity(_subtitleBackgroundOpacity),
           VlcSubtitleOptions.outlineThickness(VlcSubtitleThickness.normal),
         ]),
       ),
     );
 
     ctrl.addOnInitListener(() async {
-      if (kDebugMode) {
+      if (!kReleaseMode) {
         debugPrint(
           '[TestSubtitleApp] Player initialized with --freetype-rel-fontsize=${fontSize.toInt()}',
         );
       }
-      if (mounted) {
-        setState(() {
-          _statusMessage =
-              'Player ready — font size ${fontSize.toInt()} via --freetype-rel-fontsize';
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _statusMessage =
+            'Player ready — font size ${fontSize.toInt()} via --freetype-rel-fontsize';
+      });
     });
 
     return ctrl;
@@ -80,8 +82,10 @@ class _TestSubtitleAppState extends State<TestSubtitleApp> {
     }
 
     final old = _controller;
-    await old.stopRendererScanning();
-    await old.dispose();
+    if (old != null) {
+      await old.stopRendererScanning();
+      await old.dispose();
+    }
 
     if (!mounted) return;
     setState(() {
@@ -93,17 +97,25 @@ class _TestSubtitleAppState extends State<TestSubtitleApp> {
 
   @override
   Widget build(BuildContext context) {
+    final controller = _controller;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('VLC Font Size Test (MobileVLCKit 3)'),
       ),
       body: Column(
         children: [
-          VlcPlayer(
-            controller: _controller,
-            aspectRatio: 16 / 9,
-            placeholder: const Center(child: CircularProgressIndicator()),
-          ),
+          if (controller == null)
+            const AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else
+            VlcPlayer(
+              controller: controller,
+              aspectRatio: 16 / 9,
+              placeholder: const Center(child: CircularProgressIndicator()),
+            ),
           Padding(
             padding: const EdgeInsets.all(8),
             child: Text(
@@ -149,8 +161,11 @@ class _TestSubtitleAppState extends State<TestSubtitleApp> {
 
   @override
   Future<void> dispose() async {
-    await _controller.stopRendererScanning();
-    await _controller.dispose();
+    final controller = _controller;
+    if (controller != null) {
+      await controller.stopRendererScanning();
+      await controller.dispose();
+    }
     super.dispose();
   }
 }

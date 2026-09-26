@@ -22,20 +22,22 @@ allprojects {
 }
 
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
+
+// AGP 9 uses built-in Kotlin. Applying kotlin-android fails when
+// android.builtInKotlin=true. Keep the plugin only for AGP 8 hosts.
+def agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.tokenize('.').first().toInteger()
+if (agpMajor < 9) {
+    apply plugin: "kotlin-android"
+}
 
 android {
     namespace = "software.solid.fluttervlcplayer"
 
-    compileSdk = 35
+    compileSdk = 36
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     sourceSets {
@@ -66,5 +68,11 @@ android {
                 showStandardStreams = true
             }
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }

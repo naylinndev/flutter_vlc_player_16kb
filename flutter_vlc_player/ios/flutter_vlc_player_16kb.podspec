@@ -13,10 +13,7 @@ Pod::Spec.new do |s|
   s.source           = { :path => '.' }
 
   # Include all source files
-  s.source_files        = 'Classes/**/*.{h,m,swift}'
-
-  # Make the umbrella header public
-  s.public_header_files = 'Classes/**/*.h'
+  s.source_files = 'flutter_vlc_player_16kb/Sources/flutter_vlc_player_16kb/**/*.swift'
 
   s.dependency       'Flutter'
   s.platform         = :ios, '11.0'
