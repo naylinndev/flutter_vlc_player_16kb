@@ -1,6 +1,25 @@
 import 'package:pigeon/pigeon.dart';
 
 //ignore: prefer_match_file_name
+class BooleanMessage {
+  final bool result;
+
+  const BooleanMessage({required this.result});
+}
+
+class RecordMessage {
+  final int playerId;
+  final String path;
+
+  const RecordMessage({required this.playerId, required this.path});
+}
+
+class ViewMessage {
+  final int playerId;
+
+  const ViewMessage({required this.playerId});
+}
+
 class CreateMessage {
   final int playerId;
   final String uri;
@@ -74,7 +93,8 @@ class AddAudioMessage {
   });
 }
 
-@HostApi(dartHostTestHandler: 'TestHostVlcPlayerApi')
+@HostApi()
+
 abstract class VlcPlayerApi {
   void initialize();
 
@@ -126,6 +146,8 @@ abstract class VlcPlayerApi {
   void setSpuDelay(int playerId, int delay);
 
   int getSpuDelay(int playerId);
+
+  void setSubtitleHeightScale(int playerId, double scale);
 
   void addSubtitleTrack(AddSubtitleMessage msg);
 

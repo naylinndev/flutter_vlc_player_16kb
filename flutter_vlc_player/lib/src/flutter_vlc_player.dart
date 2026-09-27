@@ -35,6 +35,7 @@ class VlcPlayer extends StatefulWidget {
 
 class _VlcPlayerState extends State<VlcPlayer> {
   bool _isInitialized = false;
+  bool _delayViewCreation = true;
 
   //ignore: avoid_late_keyword
   late VoidCallback _listener;
@@ -59,6 +60,15 @@ class _VlcPlayerState extends State<VlcPlayer> {
     // Need to listen for initialization events since the actual initialization value
     // becomes available after asynchronous initialization finishes.
     widget.controller.addListener(_listener);
+
+    // Delay platform view creation by one frame on iOS to prevent the race condition
+    // where multiple views are created or recreated too quickly (recreating_view error).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _delayViewCreation = false;
+      });
+    });
   }
 
   @override
@@ -73,10 +83,12 @@ class _VlcPlayerState extends State<VlcPlayer> {
           ),
           Offstage(
             offstage: !_isInitialized,
-            child: vlcPlayerPlatform.buildView(
-              widget.controller.onPlatformViewCreated,
-              virtualDisplay: widget.virtualDisplay,
-            ),
+            child: _delayViewCreation
+                ? (widget.placeholder ?? Container())
+                : vlcPlayerPlatform.buildView(
+                    widget.controller.onPlatformViewCreated,
+                    virtualDisplay: widget.virtualDisplay,
+                  ),
           ),
         ],
       ),

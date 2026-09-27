@@ -523,7 +523,7 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   Future<void> seekTo(Duration position) async {
     _throwIfNotInitialized('seekTo');
     final Duration newPosition;
-    if (position > value.duration) {
+    if (value.duration > Duration.zero && position > value.duration) {
       newPosition = value.duration;
     } else if (position < Duration.zero) {
       newPosition = Duration.zero;
@@ -639,6 +639,16 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
 
     return vlcPlayerPlatform.setSpuTrack(_viewId, spuTrackNumber);
   }
+
+  /// Sets the subtitle height scale.
+  /// [scale] - the weight scale value
+  Future<void> setSubtitleHeightScale(double scale) async {
+    _throwIfNotInitialized('setSubtitleHeightScale');
+
+    return vlcPlayerPlatform.setSubtitleHeightScale(_viewId, scale);
+  }
+
+  /// Returns active spu track index
 
   /// Returns active spu track index
   Future<int?> getSpuTrack() async {

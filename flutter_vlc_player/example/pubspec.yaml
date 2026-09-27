@@ -16,6 +16,10 @@ dependencies:
 
   path_provider: ^2.1.5
 
+dependency_overrides:
+  flutter_vlc_player_platform_interface:
+    path: ../../flutter_vlc_player_platform_interface
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -13,15 +13,13 @@ Pod::Spec.new do |s|
   s.source           = { :path => '.' }
 
   # Include all source files
-  s.source_files        = 'Classes/**/*.{h,m,swift}'
-
-  # Make the umbrella header public
-  s.public_header_files = 'Classes/**/*.h'
+  s.source_files = 'flutter_vlc_player_16kb/Sources/flutter_vlc_player_16kb/**/*.swift'
 
   s.dependency       'Flutter'
   s.platform         = :ios, '11.0'
-  s.dependency       'MobileVLCKit', '~> 3.6.1b1'
-  s.static_framework = true
+  # VLCKit 4 is a unified pod for all Apple platforms.
+  s.dependency       'MobileVLCKit', '3.7.3'
+  s.static_framework = false
   s.swift_version    = '5.0'
 
   s.pod_target_xcconfig = {

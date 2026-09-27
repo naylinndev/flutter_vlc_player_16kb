@@ -206,6 +206,12 @@ public class VLCViewBuilder: NSObject, VlcPlayerApi {
         player.addSubtitleTrack(uri: msg.uri, isSelected: msg.isSelected)
     }
     
+    func setSubtitleHeightScale(playerId: Int64, scale: Double) throws {
+        let player = try getPlayer(id: playerId)
+        
+        player.setSubtitleHeightScale(scale: scale.float)
+    }
+    
     // MARK: - Audio Tracks
     
     func getAudioTracksCount(playerId: Int64) throws -> Int64 {
@@ -314,16 +320,16 @@ public class VLCViewBuilder: NSObject, VlcPlayerApi {
     
     // MARK: - Recording
     
-    func startRecording(playerId: Int64, saveDirectory: String) throws -> Bool {
-        let player = try getPlayer(id: playerId)
-        
-        return player.startRecording(saveDirectory: saveDirectory)
+    func startRecording(msg: RecordMessage) throws -> BooleanMessage {
+        let player = try getPlayer(id: msg.playerId)
+        let result = player.startRecording(saveDirectory: msg.path)
+        return BooleanMessage(result: result)
     }
     
-    func stopRecording(playerId: Int64) throws -> Bool {
-        let player = try getPlayer(id: playerId)
-        
-        return player.stopRecording()
+    func stopRecording(msg: ViewMessage) throws -> BooleanMessage {
+        let player = try getPlayer(id: msg.playerId)
+        let result = player.stopRecording()
+        return BooleanMessage(result: result)
     }
 }
 

@@ -238,6 +238,12 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
 
     @NonNull
     @Override
+    public void setSubtitleHeightScale(@NonNull Long playerId, @NonNull Double scale) {
+        var player = getPlayer(playerId);
+        player.setSubtitleHeightScale(scale.floatValue());
+    }
+
+    @Override
     public Long getSpuDelay(@NonNull Long playerId) {
         return getPlayer(playerId).getSpuDelay();
     }
@@ -398,15 +404,21 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
 
     @NonNull
     @Override
-    public Boolean startRecording(@NonNull Long playerId, @NonNull String saveDirectory) {
-        var player = getPlayer(playerId);
-        return player.startRecording(saveDirectory);
+    public Messages.BooleanMessage startRecording(@NonNull Messages.RecordMessage arg) {
+        var player = getPlayer(arg.getPlayerId());
+        boolean result = player.startRecording(arg.getPath());
+        Messages.BooleanMessage msg = new Messages.BooleanMessage();
+        msg.setResult(result);
+        return msg;
     }
 
     @NonNull
     @Override
-    public Boolean stopRecording(@NonNull Long playerId) {
-        var player = getPlayer(playerId);
-        return player.stopRecording();
+    public Messages.BooleanMessage stopRecording(@NonNull Messages.ViewMessage arg) {
+        var player = getPlayer(arg.getPlayerId());
+        boolean result = player.stopRecording();
+        Messages.BooleanMessage msg = new Messages.BooleanMessage();
+        msg.setResult(result);
+        return msg;
     }
 }

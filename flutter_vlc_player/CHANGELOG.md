@@ -1,3 +1,6 @@
+## 7.4.8
+* [iOS] Fix EXC_BAD_ACCESS crash during playback by reading position from `player.position` synchronously in `mediaPlayerTimeChanged` instead of deferring `player.time` reads to a background queue
+
 ## 7.4.3
 * Bumped minimum Flutter SDK requirement to 3.22.0 and Dart SDK requirement to 3.7.0. The minimum supported Android version is now 5.0 (API level 21)
 * [Android] updated libvlc

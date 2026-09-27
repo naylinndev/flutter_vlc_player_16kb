@@ -194,6 +194,12 @@ abstract class VlcPlayerPlatform extends PlatformInterface {
     throw _unimplemented('getSpuDelay');
   }
 
+  /// Sets the subtitle height scale.
+  /// [scale] - the weight scale value
+  Future<void> setSubtitleHeightScale(int viewId, double scale) {
+    throw _unimplemented('setSubtitleHeightScale');
+  }
+
   /// Add extra subtitle to media.
   /// [uri] - URL of subtitle
   /// [type] - Set type of subtitle

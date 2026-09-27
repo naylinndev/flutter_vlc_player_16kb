@@ -313,6 +313,11 @@ class MethodChannelVlcPlayer extends VlcPlayerPlatform {
   }
 
   @override
+  Future<void> setSubtitleHeightScale(int viewId, double scale) {
+    return _api.setSubtitleHeightScale(viewId, scale);
+  }
+
+  @override
   Future<void> addSubtitleTrack(
     int viewId, {
     required String uri,
@@ -426,9 +431,7 @@ class MethodChannelVlcPlayer extends VlcPlayerPlatform {
       return null;
     }
 
-    final imageBytes = base64Decode(base64.normalize(base64String));
-
-    return imageBytes;
+    return base64Decode(base64.normalize(base64String));
   }
 
   @override
@@ -485,12 +488,16 @@ class MethodChannelVlcPlayer extends VlcPlayerPlatform {
   }
 
   @override
-  Future<bool> startRecording(int viewId, String saveDirectory) {
-    return _api.startRecording(viewId, saveDirectory);
+  Future<bool> startRecording(int viewId, String saveDirectory) async {
+    final result = await _api.startRecording(RecordMessage(playerId: viewId, path: saveDirectory));
+    
+    return result.result;
   }
 
   @override
-  Future<bool> stopRecording(int viewId) {
-    return _api.stopRecording(viewId);
+  Future<bool> stopRecording(int viewId) async {
+    final result = await _api.stopRecording(ViewMessage(playerId: viewId));
+    
+    return result.result;
   }
 }
