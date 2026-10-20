@@ -1,46 +1,17 @@
 group 'software.solid.fluttervlcplayer'
 version '1.0-SNAPSHOT'
 
-buildscript {
-    ext.kotlin_version = "2.1.0"
-    repositories {
-        google()
-        mavenCentral()
-    }
-
-    dependencies {
-        classpath("com.android.tools.build:gradle:8.7.0")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-
+// Sources are Java only, so no Kotlin plugin: works with AGP 9 built-in Kotlin on or off.
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
 
 android {
     namespace = "software.solid.fluttervlcplayer"
 
-    compileSdk = 35
+    compileSdk = 36
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11
-    }
-
-    sourceSets {
-        main.java.srcDirs += "src/main/kotlin"
-        test.java.srcDirs += "src/test/kotlin"
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     defaultConfig {
@@ -48,7 +19,6 @@ android {
     }
 
     dependencies {
-        testImplementation("org.jetbrains.kotlin:kotlin-test")
         testImplementation("org.mockito:mockito-core:5.0.0")
         implementation 'org.videolan.android:libvlc-all:4.0.0-eap21'
         implementation 'androidx.appcompat:appcompat:1.7.0'
