@@ -1,4 +1,7 @@
 
+## 7.4.8
+* [Android] Fixed ANR when stopping, changing the media of or disposing a player whose stream has stalled: libVLC stop/release no longer run on the main thread
+
 ## 7.4.7
 * Fixed audio track and subtitle track issues in Android
 
