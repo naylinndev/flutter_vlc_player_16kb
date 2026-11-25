@@ -24,6 +24,8 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
 
     private Handler mHandler;
     private Runnable mLayoutChangeRunnable = null;
+    // Set by FlutterVlcPlayer, which runs playback calls on its worker thread.
+    private Runnable mResumePlayback = null;
 
     public VLCTextureView(final Context context) {
         super(context);
@@ -60,7 +62,12 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
         }
         mTextureEntry = null;
         mMediaPlayer = null;
+        mResumePlayback = null;
         mContext = null;
+    }
+
+    public void setResumePlayback(Runnable resumePlayback) {
+        mResumePlayback = resumePlayback;
     }
 
     private void initVideoView() {
@@ -110,8 +117,8 @@ public class VLCTextureView extends TextureView implements TextureView.SurfaceTe
                         mMediaPlayer.getVLCVout().attachViews(this);
                     }
                     mMediaPlayer.setVideoTrackEnabled(true);
-                    if (wasPlaying) {
-                        mMediaPlayer.play();
+                    if (wasPlaying && mResumePlayback != null) {
+                        mResumePlayback.run();
                     }
                 }
             }

@@ -3,6 +3,8 @@ package software.solid.fluttervlcplayer;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
@@ -23,6 +25,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.EventChannel;
@@ -30,10 +36,31 @@ import io.flutter.plugin.platform.PlatformView;
 import io.flutter.view.TextureRegistry;
 import software.solid.fluttervlcplayer.Enums.HwAcc;
 
+/**
+ * libVLC's MediaPlayer.stop() and release() wait for the player's input
+ * thread to exit. With a stalled network stream that can take minutes or
+ * never happen, so calling them on the main thread caused ANRs. Every call
+ * that changes the playback state therefore runs on {@link #worker}, one
+ * thread per player, in the order Dart issued them. A stalled stop only blocks
+ * its own player's worker.
+ *
+ * <p>The main thread attaches/detaches the views, forwards events and answers
+ * the synchronous getters. While a stop or release is pending the getters do
+ * not call into libVLC (they could block too) and return the same "unknown"
+ * values as for a missing player.
+ *
+ * <p>A stop or release that has not returned after {@link #STOP_WARNING_MS} is
+ * logged (see {@link #runStop}). libVLC can block there for good, e.g. when
+ * the hardware decoder never delivers a first picture; that player's threads
+ * then stay alive, but the app keeps running.
+ */
 final class FlutterVlcPlayer implements PlatformView {
 
+    // A libVLC stop/release still running after this long is logged.
+    private static final long STOP_WARNING_MS = 5000;
     private final String TAG = this.getClass().getSimpleName();
     private final boolean debug = false;
+    private final int viewId;
     //
     private final Context context;
     private final VLCTextureView textureView;
@@ -45,12 +72,21 @@ final class FlutterVlcPlayer implements PlatformView {
     private final QueuingEventSink rendererEventSink = new QueuingEventSink();
     private final EventChannel rendererEventChannel;
     //
+    private final ExecutorService worker;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    // Number of stop/release calls queued or running on the worker.
+    private final AtomicInteger pendingStops = new AtomicInteger();
+    //
     private LibVLC libVLC;
     private MediaPlayer mediaPlayer;
     private List<String> options;
     private List<RendererDiscoverer> rendererDiscoverers = new ArrayList<>();
     private List<RendererItem> rendererItems = new ArrayList<>();
-    private boolean isDisposed = false;
+    // Volatile: also read by worker tasks.
+    private volatile boolean isDisposed = false;
+    // Position of the last timeChanged event, sent with "ended" when the
+    // getters can't be used (see queryable()).
+    private long lastPosition = 0;
 
     // Platform view
     @Override
@@ -62,28 +98,50 @@ final class FlutterVlcPlayer implements PlatformView {
     public void dispose() {
         if (isDisposed)
             return;
+        isDisposed = true;
+        final MediaPlayer mp = mediaPlayer;
+        final LibVLC vlc = libVLC;
+        mediaPlayer = null;
+        libVLC = null;
         //
-        textureView.dispose();
-        textureEntry.release();
         mediaEventChannel.setStreamHandler(null);
         rendererEventChannel.setStreamHandler(null);
-        if (mediaPlayer != null) {
-            mediaPlayer.stop();
-            mediaPlayer.setEventListener(null);
-            mediaPlayer.getVLCVout().detachViews();
-            mediaPlayer.release();
-            mediaPlayer = null;
+        if (mp != null) {
+            mp.setEventListener(null);
+            mp.getVLCVout().detachViews();
         }
-        if (libVLC != null) {
-            libVLC.release();
-            libVLC = null;
-        }
-        isDisposed = true;
+        textureView.dispose();
+        textureEntry.release();
+        //
+        // Queued behind any pending stop/setStreamUrl of this player; may take
+        // long if the stream is stalled.
+        pendingStops.incrementAndGet();
+        enqueue(() -> {
+            try {
+                runStop("release", () -> {
+                    if (mp != null) {
+                        mp.stop();
+                        mp.release();
+                    }
+                    if (vlc != null)
+                        vlc.release();
+                });
+            } finally {
+                pendingStops.decrementAndGet();
+            }
+        }, null, true);
+        worker.shutdown();
     }
 
     // VLC Player
     FlutterVlcPlayer(int viewId, Context context, BinaryMessenger binaryMessenger, TextureRegistry textureRegistry) {
         this.context = context;
+        this.viewId = viewId;
+        worker = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "VlcPlayerWorker-" + viewId);
+            thread.setDaemon(true);
+            return thread;
+        });
         // event for media
         mediaEventChannel = new EventChannel(binaryMessenger, "flutter_video_plugin/getVideoEvents_" + viewId);
         mediaEventChannel.setStreamHandler(
@@ -118,6 +176,67 @@ final class FlutterVlcPlayer implements PlatformView {
         textureView.setSurfaceTexture(textureEntry.surfaceTexture());
         textureView.forceLayout();
         textureView.setFitsSystemWindows(true);
+        // Resuming after the surface comes back must stay in order with the
+        // other calls.
+        textureView.setResumePlayback(this::play);
+    }
+
+    /**
+     * Runs task on the worker. result (may be null) is completed on the main
+     * thread afterwards, also when the task was skipped. Tasks of a disposed
+     * player are skipped unless runWhenDisposed.
+     */
+    private void enqueue(Runnable task, @Nullable Messages.Result<Void> result, boolean runWhenDisposed) {
+        try {
+            worker.execute(() -> {
+                Throwable error = null;
+                try {
+                    if (runWhenDisposed || !isDisposed)
+                        task.run();
+                } catch (Throwable t) {
+                    // An exception must not kill the worker (or the app).
+                    // Class only: the message can contain the media URL.
+                    Log.e(TAG, "libVLC call failed: " + t.getClass().getName());
+                    error = t;
+                }
+                if (result != null) {
+                    final Throwable failure = error;
+                    mainHandler.post(() -> {
+                        if (failure == null)
+                            result.success(null);
+                        else
+                            result.error(failure);
+                    });
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            // Worker already shut down: the player was disposed.
+            if (result != null)
+                mainHandler.post(() -> result.success(null));
+        }
+    }
+
+    /** Runs task on the worker with the current MediaPlayer, if any. */
+    private void enqueue(PlayerTask task) {
+        final MediaPlayer mp = mediaPlayer;
+        if (mp == null || isDisposed)
+            return;
+        enqueue(() -> task.run(mp), null, false);
+    }
+
+    private interface PlayerTask {
+        void run(MediaPlayer mp);
+    }
+
+    /**
+     * The player for a synchronous getter on the main thread, or null while
+     * it must not be called: disposed, or a stop/release is still pending.
+     */
+    @Nullable
+    private MediaPlayer queryable() {
+        if (isDisposed || pendingStops.get() > 0)
+            return null;
+        return mediaPlayer;
     }
 
     public void initialize(List<String> options) {
@@ -140,6 +259,12 @@ final class FlutterVlcPlayer implements PlatformView {
                 new MediaPlayer.EventListener() {
                     @Override
                     public void onEvent(MediaPlayer.Event event) {
+                        if (isDisposed)
+                            return;
+                        // Null while a stop/release is pending: the events then
+                        // belong to the media being stopped, and the ones that
+                        // need getters are dropped.
+                        final MediaPlayer mp = queryable();
                         HashMap<String, Object> eventObject = new HashMap<>();
                         //
                         // Get video dimensions from texture view as fallback
@@ -164,11 +289,13 @@ final class FlutterVlcPlayer implements PlatformView {
                                 break;
 
                             case MediaPlayer.Event.Playing:
+                                if (mp == null)
+                                    break;
                                 eventObject.put("event", "playing");
                                 eventObject.put("height", height);
                                 eventObject.put("width", width);
-                                eventObject.put("speed", mediaPlayer.getRate());
-                                eventObject.put("duration", mediaPlayer.getLength());
+                                eventObject.put("speed", mp.getRate());
+                                eventObject.put("duration", mp.getLength());
                                 eventObject.put("audioTracksCount", getAudioTracksCount());
                                 eventObject.put("activeAudioTrack", getAudioTrack());
                                 eventObject.put("spuTracksCount", getSpuTracksCount());
@@ -181,24 +308,27 @@ final class FlutterVlcPlayer implements PlatformView {
 
                             case MediaPlayer.Event.EndReached:
                                 eventObject.put("event", "ended");
-                                eventObject.put("position", mediaPlayer.getTime());
+                                eventObject.put("position", mp != null ? mp.getTime() : lastPosition);
                                 mediaEventSink.success(eventObject);
                                 break;
 
                             case MediaPlayer.Event.Buffering:
                             case MediaPlayer.Event.TimeChanged:
+                                if (mp == null)
+                                    break;
+                                lastPosition = mp.getTime();
                                 eventObject.put("event", "timeChanged");
                                 eventObject.put("height", height);
                                 eventObject.put("width", width);
-                                eventObject.put("speed", mediaPlayer.getRate());
-                                eventObject.put("position", mediaPlayer.getTime());
-                                eventObject.put("duration", mediaPlayer.getLength());
+                                eventObject.put("speed", mp.getRate());
+                                eventObject.put("position", lastPosition);
+                                eventObject.put("duration", mp.getLength());
                                 eventObject.put("buffer", event.getBuffering());
                                 eventObject.put("audioTracksCount", getAudioTracksCount());
                                 eventObject.put("activeAudioTrack", getAudioTrack());
                                 eventObject.put("spuTracksCount", getSpuTracksCount());
                                 eventObject.put("activeSpuTrack", getSpuTrack());
-                                eventObject.put("isPlaying", mediaPlayer.isPlaying());
+                                eventObject.put("isPlaying", mp.isPlaying());
                                 mediaEventSink.success(eventObject);
                                 break;
 
@@ -231,138 +361,170 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void play() {
-        if (mediaPlayer != null && !mediaPlayer.isPlaying()) {
-            mediaPlayer.play();
-        }
+        enqueue(mp -> {
+            if (!mp.isPlaying())
+                mp.play();
+        });
     }
 
     void pause() {
-        if (mediaPlayer != null && mediaPlayer.isPlaying()) {
-            mediaPlayer.pause();
-        }
+        enqueue(mp -> {
+            if (mp.isPlaying())
+                mp.pause();
+        });
     }
 
-    void stop() {
-        if (mediaPlayer != null) {
-            mediaPlayer.stop();
+    /** Completes result on the main thread once libVLC has stopped (or the stop was skipped). */
+    void stop(Messages.Result<Void> result) {
+        final MediaPlayer mp = mediaPlayer;
+        if (mp == null || isDisposed) {
+            result.success(null);
+            return;
         }
+        pendingStops.incrementAndGet();
+        enqueue(() -> {
+            try {
+                if (!isDisposed)
+                    runStop("stop", mp::stop);
+            } finally {
+                pendingStops.decrementAndGet();
+            }
+        }, result, true);
     }
 
     boolean isPlaying() {
-        if (mediaPlayer == null) return false;
-        return mediaPlayer.isPlaying();
+        MediaPlayer mp = queryable();
+        if (mp == null) return false;
+        return mp.isPlaying();
     }
 
     boolean isSeekable() {
-        if (mediaPlayer == null) return false;
-        return mediaPlayer.isSeekable();
+        MediaPlayer mp = queryable();
+        if (mp == null) return false;
+        return mp.isSeekable();
     }
 
-    void setStreamUrl(String url, boolean isAssetUrl, boolean autoPlay, long hwAcc) {
-        if (mediaPlayer == null) return;
-
-        try {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.stop();
-            }
-            //
-            Media media;
-            if (isAssetUrl)
-                media = new Media(libVLC, context.getAssets().openFd(url));
-            else if (url.startsWith("content://"))
-                media = new Media(libVLC, context.getContentResolver().openFileDescriptor(Uri.parse(url), "r").getFileDescriptor());
-            else
-                media = new Media(libVLC, Uri.parse(url));
-            final HwAcc hwAccValue = HwAcc.values()[(int) hwAcc];
-            switch (hwAccValue) {
-                case DISABLED:
-                    media.setHWDecoderEnabled(false, false);
-                    break;
-                case DECODING:
-                case FULL:
-                    media.setHWDecoderEnabled(true, true);
-                    break;
-            }
-            if (hwAccValue == HwAcc.DECODING) {
-                media.addOption(":no-mediacodec-dr");
-                media.addOption(":no-omxil-dr");
-            }
-            if (options != null) {
-                for (String option : options)
-                    media.addOption(option);
-            }
-            mediaPlayer.setMedia(media);
-            media.release();
-            //
-            if (autoPlay) {
-                mediaPlayer.play();
-            }
-        } catch (IOException e) {
-            log(e.getMessage());
+    /** Completes result on the main thread once the media is set (or the call was skipped). */
+    void setStreamUrl(String url, boolean isAssetUrl, boolean autoPlay, long hwAcc, Messages.Result<Void> result) {
+        final MediaPlayer mp = mediaPlayer;
+        final LibVLC vlc = libVLC;
+        if (mp == null || vlc == null || isDisposed) {
+            result.success(null);
+            return;
         }
+        lastPosition = 0;
+        final List<String> mediaOptions = options;
+        enqueue(() -> {
+            try {
+                if (mp.isPlaying()) {
+                    pendingStops.incrementAndGet();
+                    try {
+                        runStop("stop", mp::stop);
+                    } finally {
+                        pendingStops.decrementAndGet();
+                    }
+                }
+                if (isDisposed)
+                    return;
+                //
+                Media media;
+                if (isAssetUrl)
+                    media = new Media(vlc, context.getAssets().openFd(url));
+                else if (url.startsWith("content://"))
+                    media = new Media(vlc, context.getContentResolver().openFileDescriptor(Uri.parse(url), "r").getFileDescriptor());
+                else
+                    media = new Media(vlc, Uri.parse(url));
+                final HwAcc hwAccValue = HwAcc.values()[(int) hwAcc];
+                switch (hwAccValue) {
+                    case DISABLED:
+                        media.setHWDecoderEnabled(false, false);
+                        break;
+                    case DECODING:
+                    case FULL:
+                        media.setHWDecoderEnabled(true, true);
+                        break;
+                }
+                if (hwAccValue == HwAcc.DECODING) {
+                    media.addOption(":no-mediacodec-dr");
+                    media.addOption(":no-omxil-dr");
+                }
+                if (mediaOptions != null) {
+                    for (String option : mediaOptions)
+                        media.addOption(option);
+                }
+                mp.setMedia(media);
+                media.release();
+                //
+                if (autoPlay) {
+                    mp.play();
+                }
+            } catch (IOException e) {
+                log(e.getMessage());
+            }
+        }, result, false);
     }
 
     void setLooping(boolean value) {
-        if (mediaPlayer != null) {
-            if (mediaPlayer.getMedia() != null)
-                mediaPlayer.getMedia().addOption(value ? "--loop" : "--no-loop");
-        }
+        enqueue(mp -> {
+            if (mp.getMedia() != null)
+                mp.getMedia().addOption(value ? "--loop" : "--no-loop");
+        });
     }
 
     void setVolume(long value) {
-        if (mediaPlayer == null) return;
-
         long bracketedValue = Math.max(0, Math.min(100, value));
-        mediaPlayer.setVolume((int) bracketedValue);
+        enqueue(mp -> mp.setVolume((int) bracketedValue));
     }
 
     int getVolume() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        return mediaPlayer.getVolume();
+        return mp.getVolume();
     }
 
     void setPlaybackSpeed(double value) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.setRate((float) value);
+        enqueue(mp -> mp.setRate((float) value));
     }
 
     float getPlaybackSpeed() {
-        if (mediaPlayer == null) return -1.0f;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1.0f;
 
-        return mediaPlayer.getRate();
+        return mp.getRate();
     }
 
     void seekTo(long location) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.setTime(location);
+        enqueue(mp -> mp.setTime(location));
     }
 
     long getPosition() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        return mediaPlayer.getTime();
+        return mp.getTime();
     }
 
     long getDuration() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        return mediaPlayer.getLength();
+        return mp.getLength();
     }
 
     int getSpuTracksCount() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        IMedia.Track[] spuTracks = mediaPlayer.getTracks(IMedia.Track.Type.Text);
+        IMedia.Track[] spuTracks = mp.getTracks(IMedia.Track.Type.Text);
         return spuTracks != null ? spuTracks.length : 0;
     }
 
     HashMap<Integer, String> getSpuTracks() {
-        if (mediaPlayer == null) return new HashMap<Integer, String>();
+        MediaPlayer mp = queryable();
+        if (mp == null) return new HashMap<Integer, String>();
 
-        IMedia.Track[] spuTracks = mediaPlayer.getTracks(IMedia.Track.Type.Text);
+        IMedia.Track[] spuTracks = mp.getTracks(IMedia.Track.Type.Text);
         HashMap<Integer, String> subtitles = new HashMap<>();
         if (spuTracks != null)
             for (IMedia.Track trackDescription : spuTracks) {
@@ -372,26 +534,26 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void setSpuTrack(int index) {
-        if (mediaPlayer == null) return;
-
-        try {
-          
-            if ( index >= 0) {
-            // Select the track by its ID
-            mediaPlayer.selectTrack("spu/"+index);
-            } else if (index == -1) {
-            // Unselect all text tracks
-                mediaPlayer.unselectTrackType(IMedia.Track.Type.Text);
+        enqueue(mp -> {
+            try {
+                if (index >= 0) {
+                    // Select the track by its ID
+                    mp.selectTrack("spu/" + index);
+                } else if (index == -1) {
+                    // Unselect all text tracks
+                    mp.unselectTrackType(IMedia.Track.Type.Text);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "setAudioTrack failed: " + e.getMessage());
             }
-        } catch (Exception e) {
-        Log.e(TAG, "setAudioTrack failed: " + e.getMessage());
-        }
+        });
     }
 
     int getSpuTrack() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        IMedia.Track track = mediaPlayer.getSelectedTrack(IMedia.Track.Type.Text);
+        IMedia.Track track = mp.getSelectedTrack(IMedia.Track.Type.Text);
         if(track == null) {
             return -1;
         }
@@ -399,34 +561,33 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void setSpuDelay(long delay) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.setSpuDelay(delay);
+        enqueue(mp -> mp.setSpuDelay(delay));
     }
 
     long getSpuDelay() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        return mediaPlayer.getSpuDelay();
+        return mp.getSpuDelay();
     }
 
     void addSubtitleTrack(String url, boolean isSelected) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.addSlave(Media.Slave.Type.Subtitle, Uri.parse(url), isSelected);
+        enqueue(mp -> mp.addSlave(Media.Slave.Type.Subtitle, Uri.parse(url), isSelected));
     }
 
     int getAudioTracksCount() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        IMedia.Track[] audioTracks = mediaPlayer.getTracks(IMedia.Track.Type.Audio);
+        IMedia.Track[] audioTracks = mp.getTracks(IMedia.Track.Type.Audio);
         return audioTracks != null ? audioTracks.length : 0;
     }
 
     HashMap<Integer, String> getAudioTracks() {
-        if (mediaPlayer == null) return new HashMap<Integer, String>();
+        MediaPlayer mp = queryable();
+        if (mp == null) return new HashMap<Integer, String>();
 
-        IMedia.Track[] audioTracks = mediaPlayer.getTracks(IMedia.Track.Type.Audio);
+        IMedia.Track[] audioTracks = mp.getTracks(IMedia.Track.Type.Audio);
         HashMap<Integer, String> audios = new HashMap<>();
         Random random = new Random();
         if (audioTracks != null)
@@ -437,26 +598,26 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void setAudioTrack(int index) {
-        if (mediaPlayer == null) return;
-
-        try {
-          
-            if ( index >= 0) {
-            // Select the track by its ID
-            mediaPlayer.selectTrack("audio/"+index);
-            } else if (index == -1) {
-            // Unselect all audio tracks
-                mediaPlayer.unselectTrackType(IMedia.Track.Type.Audio);
+        enqueue(mp -> {
+            try {
+                if (index >= 0) {
+                    // Select the track by its ID
+                    mp.selectTrack("audio/" + index);
+                } else if (index == -1) {
+                    // Unselect all audio tracks
+                    mp.unselectTrackType(IMedia.Track.Type.Audio);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "setAudioTrack failed: " + e.getMessage());
             }
-        } catch (Exception e) {
-        Log.e(TAG, "setAudioTrack failed: " + e.getMessage());
-        }
+        });
     }
 
     int getAudioTrack() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        IMedia.Track track = mediaPlayer.getSelectedTrack(IMedia.Track.Type.Audio);
+        IMedia.Track track = mp.getSelectedTrack(IMedia.Track.Type.Audio);
         if(track == null) {
             return -1;
         }
@@ -464,35 +625,34 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void setAudioDelay(long delay) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.setAudioDelay(delay);
+        enqueue(mp -> mp.setAudioDelay(delay));
     }
 
     long getAudioDelay() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        return mediaPlayer.getAudioDelay();
+        return mp.getAudioDelay();
     }
 
     void addAudioTrack(String url, boolean isSelected) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.addSlave(Media.Slave.Type.Audio, Uri.parse(url), isSelected);
+        enqueue(mp -> mp.addSlave(Media.Slave.Type.Audio, Uri.parse(url), isSelected));
     }
 
     int getVideoTracksCount() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        IMedia.Track[] videoTracks = mediaPlayer.getTracks(IMedia.Track.Type.Video);
+        IMedia.Track[] videoTracks = mp.getTracks(IMedia.Track.Type.Video);
         return videoTracks != null ? videoTracks.length : 0;
 
     }
 
     HashMap<Integer, String> getVideoTracks() {
-        if (mediaPlayer == null) return new HashMap<Integer, String>();
+        MediaPlayer mp = queryable();
+        if (mp == null) return new HashMap<Integer, String>();
 
-        IMedia.Track[] videoTracks = mediaPlayer.getTracks(IMedia.Track.Type.Video);
+        IMedia.Track[] videoTracks = mp.getTracks(IMedia.Track.Type.Video);
         HashMap<Integer, String> videos = new HashMap<>();
         if (videoTracks != null)
             for (IMedia.Track trackDescription : videoTracks) {
@@ -502,26 +662,26 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void setVideoTrack(int index) {
-        if (mediaPlayer == null) return;
-
-        try {
-          
-            if ( index >= 0) {
-            // Select the track by its ID
-            mediaPlayer.selectTrack("video/"+index);
-            } else if (index == -1) {
-            // Unselect all video tracks
-                mediaPlayer.unselectTrackType(IMedia.Track.Type.Video);
+        enqueue(mp -> {
+            try {
+                if (index >= 0) {
+                    // Select the track by its ID
+                    mp.selectTrack("video/" + index);
+                } else if (index == -1) {
+                    // Unselect all video tracks
+                    mp.unselectTrackType(IMedia.Track.Type.Video);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "setAudioTrack failed: " + e.getMessage());
             }
-        } catch (Exception e) {
-        Log.e(TAG, "setAudioTrack failed: " + e.getMessage());
-        }
+        });
     }
 
     int getVideoTrack() {
-        if (mediaPlayer == null) return -1;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1;
 
-        IMedia.Track track = mediaPlayer.getSelectedTrack(IMedia.Track.Type.Video);
+        IMedia.Track track = mp.getSelectedTrack(IMedia.Track.Type.Video);
         if(track == null) {
             return -1;
         }
@@ -530,27 +690,25 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     void setVideoScale(float scale) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.setScale(scale);
+        enqueue(mp -> mp.setScale(scale));
     }
 
     float getVideoScale() {
-        if (mediaPlayer == null) return -1.0f;
+        MediaPlayer mp = queryable();
+        if (mp == null) return -1.0f;
 
-        return mediaPlayer.getScale();
+        return mp.getScale();
     }
 
     void setVideoAspectRatio(String aspectRatio) {
-        if (mediaPlayer == null) return;
-
-        mediaPlayer.setAspectRatio(aspectRatio);
+        enqueue(mp -> mp.setAspectRatio(aspectRatio));
     }
 
     String getVideoAspectRatio() {
-        if (mediaPlayer == null) return "";
+        MediaPlayer mp = queryable();
+        if (mp == null) return "";
 
-        return mediaPlayer.getAspectRatio();
+        return mp.getAspectRatio();
     }
 
     void startRendererScanning(String rendererService) {
@@ -611,11 +769,11 @@ final class FlutterVlcPlayer implements PlatformView {
         rendererDiscoverers.clear();
         rendererItems.clear();
         //
-        if (mediaPlayer != null) {
-            mediaPlayer.pause();
-            mediaPlayer.setRenderer(null);
-            mediaPlayer.play();
-        }
+        enqueue(mp -> {
+            mp.pause();
+            mp.setRenderer(null);
+            mp.play();
+        });
     }
 
     ArrayList<String> getAvailableRendererServices() {
@@ -644,8 +802,6 @@ final class FlutterVlcPlayer implements PlatformView {
         if (isDisposed) {
             return;
         }
-        if (mediaPlayer.isPlaying())
-            mediaPlayer.pause();
 
         RendererItem rendererItem = null;
         for (RendererItem item : rendererItems) {
@@ -654,15 +810,21 @@ final class FlutterVlcPlayer implements PlatformView {
                 break;
             }
         }
-        mediaPlayer.setRenderer(rendererItem);
-
-        mediaPlayer.play();
+        final RendererItem selected = rendererItem;
+        enqueue(mp -> {
+            if (mp.isPlaying())
+                mp.pause();
+            mp.setRenderer(selected);
+            mp.play();
+        });
     }
 
     @Nullable
     String getSnapshot() {
         if (textureView == null) return null;
-        if (!mediaPlayer.isPlaying()) return null;
+        MediaPlayer mp = queryable();
+        if (mp == null) return null;
+        if (!mp.isPlaying()) return null;
         Bitmap bitmap = textureView.getBitmap();
         if (bitmap == null) return null;
 
@@ -672,12 +834,37 @@ final class FlutterVlcPlayer implements PlatformView {
     }
 
     Boolean startRecording(String directory) {
-        return mediaPlayer.record(directory, false);
+        MediaPlayer mp = queryable();
+        if (mp == null) return false;
+        return mp.record(directory, false);
     }
 
     Boolean stopRecording() {
-        if (mediaPlayer == null) return true;
-        return mediaPlayer.record(null, false);
+        MediaPlayer mp = queryable();
+        if (mp == null) return true;
+        return mp.record(null, false);
+    }
+
+    /**
+     * Runs a libVLC stop/release call on the worker and logs a warning if it
+     * has not returned after STOP_WARNING_MS, and again if it returns later.
+     */
+    private void runStop(String name, Runnable call) {
+        final long start = System.nanoTime();
+        // 0: running, 1: returned in time, 2: reported as not returned
+        final AtomicInteger state = new AtomicInteger();
+        final Runnable warning = () -> {
+            if (state.compareAndSet(0, 2))
+                Log.w(TAG, "libVLC " + name + " of player " + viewId + " has not returned after " + STOP_WARNING_MS + " ms");
+        };
+        mainHandler.postDelayed(warning, STOP_WARNING_MS);
+        try {
+            call.run();
+        } finally {
+            mainHandler.removeCallbacks(warning);
+            if (!state.compareAndSet(0, 1))
+                Log.w(TAG, "libVLC " + name + " of player " + viewId + " returned after " + (System.nanoTime() - start) / 1000000 + " ms");
+        }
     }
 
     private void log(String message) {

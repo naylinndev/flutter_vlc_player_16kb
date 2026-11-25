@@ -54,7 +54,7 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
     }
 
     @Override
-    public void create(Messages.CreateMessage arg) {
+    public void create(Messages.CreateMessage arg, Messages.Result<Void> result) {
         FlutterVlcPlayer player = vlcPlayers.get(arg.getViewId());
         //
         ArrayList<String> options = new ArrayList<String>();
@@ -77,7 +77,7 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
             mediaUrl = arg.getUri();
             isAssetUrl = false;
         }
-        player.setStreamUrl(mediaUrl, isAssetUrl, arg.getAutoPlay(), arg.getHwAcc());
+        player.setStreamUrl(mediaUrl, isAssetUrl, arg.getAutoPlay(), arg.getHwAcc(), result);
     }
 
     @Override
@@ -87,7 +87,7 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
     }
 
     @Override
-    public void setStreamUrl(Messages.SetMediaMessage arg) {
+    public void setStreamUrl(Messages.SetMediaMessage arg, Messages.Result<Void> result) {
         FlutterVlcPlayer player = vlcPlayers.get(arg.getViewId());
         //
         boolean isAssetUrl;
@@ -104,7 +104,7 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
             mediaUrl = arg.getUri();
             isAssetUrl = false;
         }
-        player.setStreamUrl(mediaUrl, isAssetUrl, arg.getAutoPlay(), arg.getHwAcc());
+        player.setStreamUrl(mediaUrl, isAssetUrl, arg.getAutoPlay(), arg.getHwAcc(), result);
     }
 
     @Override
@@ -120,9 +120,9 @@ public class FlutterVlcPlayerBuilder implements Messages.VlcPlayerApi {
     }
 
     @Override
-    public void stop(Messages.ViewMessage arg) {
+    public void stop(Messages.ViewMessage arg, Messages.Result<Void> result) {
         FlutterVlcPlayer player = vlcPlayers.get(arg.getViewId());
-        player.stop();
+        player.stop(result);
     }
 
     @Override

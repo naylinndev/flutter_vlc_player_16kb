@@ -450,7 +450,10 @@ class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
     HwAcc? hwAcc,
   }) async {
     _throwIfNotInitialized('setStreamUrl');
+    // On Android, stop completes once the native player has stopped, which can
+    // take long for a stalled stream; the controller may be disposed by then.
     await vlcPlayerPlatform.stop(_viewId);
+    if (_isDisposed) return;
     await vlcPlayerPlatform.setStreamUrl(
       _viewId,
       uri: dataSource,

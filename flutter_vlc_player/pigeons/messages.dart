@@ -151,12 +151,17 @@ class RecordMessage {
 @HostApi(dartHostTestHandler: 'TestHostVlcPlayerApi')
 abstract class VlcPlayerApi {
   void initialize();
+  // create, setStreamUrl and stop are async: Android runs them on the player's
+  // worker thread and replies once they are done.
+  @async
   void create(CreateMessage msg);
   void dispose(ViewMessage msg);
   // general methods
+  @async
   void setStreamUrl(SetMediaMessage msg);
   void play(ViewMessage msg);
   void pause(ViewMessage msg);
+  @async
   void stop(ViewMessage msg);
   BooleanMessage isPlaying(ViewMessage msg);
   BooleanMessage isSeekable(ViewMessage msg);
